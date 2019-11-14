@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/binary"
 	"math"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,13 @@ type cache struct {
 	items        glcache.Cache // cache
 	cacheSize    int           // cache size (in bytes)
 	sync.RWMutex               // lock
+}
+
+func (c *cache) GetWithSubnet(request *dns.Msg, ip net.IP, mask uint8) (*dns.Msg, bool) {
+	return nil, false
+}
+
+func (c *cache) SetWithSubnet(m *dns.Msg) {
 }
 
 func (c *cache) Get(request *dns.Msg) (*dns.Msg, bool) {

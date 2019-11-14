@@ -97,6 +97,22 @@ type Config struct {
 	AllServers   bool // if true, parallel queries to all configured upstream servers are enabled
 	IPv6Disabled bool // If true, all AAAA requests will be answered with NXDomain
 
+	// Enable EDNS Client Subnet option
+	// DNS requests to the upstream server will contain an OPT record with Client Subnet option.
+	//  If the original request already has this option set, we pass it through as is.
+	//  Otherwise, we set it ourselves using the client IP with subnet /24 (for IPv4).
+	//
+	// If the upstream server supports ECS, it sets subnet number in the response.
+	// This subnet number along with the client IP and other data is used as a cache key.
+	// Next time, if a client from the same subnet requests this host name,
+	//  we get the response from cache.
+	// If another client from a different subnet requests this host name,
+	//  we pass his request to the upstream server.
+	//
+	// If the upstream server doesn't support ECS (there's no subnet number in response),
+	//  this response will be cached for all clients.
+	EnableEDNSClientSubnet bool
+
 	CacheEnabled   bool // cache status
 	CacheSizeBytes int  // Cache size (in bytes). Default: 64k
 
@@ -360,9 +376,65 @@ func (p *Proxy) getUpstreamsForDomain(host string) []upstream.Upstream {
 	return p.Upstreams
 }
 
+func parseECS(m *dns.Msg) (net.IP, uint8) {
+	return net.IP{}, 0
+}
+
+// Set EDNS Client Subnet option in DNS request object
+// Return IP mask
+func setECS(m *dns.Msg, ip net.IP) uint8 {
+	o := new(dns.OPT)
+	o.Hdr.Name = "."
+	o.Hdr.Rrtype = dns.TypeOPT
+	e := new(dns.EDNS0_SUBNET)
+	e.Code = dns.EDNS0SUBNET
+	if ip.To4() != nil {
+		e.Family = 1
+		e.SourceNetmask = 24
+		e.Address = ip.To4()
+	} else {
+		e.Family = 2
+		e.SourceNetmask = 128
+		e.Address = ip
+	}
+	e.SourceScope = 0
+	o.Option = append(o.Option, e)
+	m.Extra = append(m.Extra, o)
+	return e.SourceNetmask
+}
+
 // Resolve is the default resolving method used by the DNS proxy to query upstreams
 func (p *Proxy) Resolve(d *DNSContext) error {
-	if p.cache != nil {
+
+	if p.Config.EnableEDNSClientSubnet {
+		// Set EDNS Client-Subnet data
+		ip, mask := parseECS(d.Req)
+		if mask == 0 {
+			var ip net.IP
+			var mask uint8
+			switch addr := d.Addr.(type) {
+			case *net.UDPAddr:
+				mask = setECS(d.Req, addr.IP)
+			case *net.TCPAddr:
+				mask = setECS(d.Req, addr.IP)
+			}
+			if len(ip) != 0 {
+				log.Debug("Set ECS option: %s/%d", ip, mask)
+			}
+		} else {
+			log.Debug("Passing through ECS option: %s/%d", ip, mask)
+		}
+
+		if p.cache != nil {
+			val, ok := p.cache.GetWithSubnet(d.Req, ip, mask)
+			if ok && val != nil {
+				d.Res = val
+				log.Tracef("Serving cached response")
+				return nil
+			}
+		}
+
+	} else if p.cache != nil {
 		val, ok := p.cache.Get(d.Req)
 		if ok && val != nil {
 			d.Res = val
@@ -395,7 +467,11 @@ func (p *Proxy) Resolve(d *DNSContext) error {
 
 		// Saving cached response
 		if p.cache != nil {
-			p.cache.Set(reply)
+			if p.Config.EnableEDNSClientSubnet {
+				p.cache.SetWithSubnet(reply)
+			} else {
+				p.cache.Set(reply)
+			}
 		}
 	}
 
