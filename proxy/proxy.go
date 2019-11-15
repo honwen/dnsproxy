@@ -429,7 +429,6 @@ func setECS(m *dns.Msg, ip net.IP) uint8 {
 
 // Resolve is the default resolving method used by the DNS proxy to query upstreams
 func (p *Proxy) Resolve(d *DNSContext) error {
-
 	if p.Config.EnableEDNSClientSubnet {
 		// Set EDNS Client-Subnet data
 		ip, mask := parseECS(d.Req)
@@ -457,7 +456,6 @@ func (p *Proxy) Resolve(d *DNSContext) error {
 				return nil
 			}
 		}
-
 	} else if p.cache != nil {
 		val, ok := p.cache.Get(d.Req)
 		if ok && val != nil {
