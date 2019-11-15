@@ -396,7 +396,6 @@ func setAndGetCache(t *testing.T, c *cache, g *sync.WaitGroup, host, ip string) 
 
 func TestSubnet(t *testing.T) {
 	c := &cache{}
-	var mask uint8
 	var a *dns.A
 
 	// search - not found
@@ -410,9 +409,7 @@ func TestSubnet(t *testing.T) {
 	resp.Response = true
 	resp.SetQuestion("example.com.", dns.TypeA)
 	resp.Answer = []dns.RR{newRR("example.com. 1 IN A 1.1.1.1")}
-	mask = setECS(resp, net.IP{1, 2, 3, 4})
-	assert.True(t, mask == 24)
-	c.SetWithSubnet(resp)
+	c.SetWithSubnet(resp, net.IP{1, 2, 3, 4}, 16)
 
 	// search for the entry (with another client IP) - not found
 	resp, _ = c.GetWithSubnet(&req, net.IP{2, 2, 3, 4}, 24)
@@ -423,15 +420,14 @@ func TestSubnet(t *testing.T) {
 	resp.Response = true
 	resp.SetQuestion("example.com.", dns.TypeA)
 	resp.Answer = []dns.RR{newRR("example.com. 1 IN A 2.2.2.2")}
-	_ = setECS(resp, net.IP{2, 2, 3, 4})
-	c.SetWithSubnet(resp)
+	c.SetWithSubnet(resp, net.IP{2, 2, 3, 4}, 16)
 
 	// add a response entry without subnet
 	resp = &dns.Msg{}
 	resp.Response = true
 	resp.SetQuestion("example.com.", dns.TypeA)
 	resp.Answer = []dns.RR{newRR("example.com. 1 IN A 3.3.3.3")}
-	c.SetWithSubnet(resp)
+	c.SetWithSubnet(resp, net.IP{}, 0)
 
 	// get the entry (with the client IP #1)
 	resp, _ = c.GetWithSubnet(&req, net.IP{1, 2, 3, 4}, 24)

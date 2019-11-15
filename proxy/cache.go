@@ -56,20 +56,24 @@ func (c *cache) GetWithSubnet(request *dns.Msg, ip net.IP, mask uint8) (*dns.Msg
 		return nil, false
 	}
 	// create key for request
-	key := keyWithSubnet(request, ip, mask)
 	c.Lock()
 	if c.items == nil {
 		c.Unlock()
 		return nil, false
 	}
 	c.Unlock()
-	data := c.items.Get(key)
-	if data == nil {
-		key = keyWithSubnet(request, net.IP{}, 0)
+
+	var key, data []byte
+	for {
+		key = keyWithSubnet(request, ip, mask)
 		data = c.items.Get(key)
-		if data == nil {
+		if data != nil {
+			break
+		}
+		if mask == 0 {
 			return nil, false
 		}
+		mask--
 	}
 
 	res := unpackResponse(data, request)
@@ -80,11 +84,10 @@ func (c *cache) GetWithSubnet(request *dns.Msg, ip net.IP, mask uint8) (*dns.Msg
 	return res, true
 }
 
-func (c *cache) SetWithSubnet(m *dns.Msg) {
+func (c *cache) SetWithSubnet(m *dns.Msg, ip net.IP, mask uint8) {
 	if m == nil || !isCacheable(m) {
 		return
 	}
-	ip, mask := parseECS(m)
 	key := keyWithSubnet(m, ip, mask)
 
 	c.Lock()

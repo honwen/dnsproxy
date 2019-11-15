@@ -376,7 +376,9 @@ func (p *Proxy) getUpstreamsForDomain(host string) []upstream.Upstream {
 	return p.Upstreams
 }
 
-func parseECS(m *dns.Msg) (net.IP, uint8) {
+// Parse ECS option from DNS response
+// Return IP, mask, scope
+func parseECS(m *dns.Msg) (net.IP, uint8, uint8) {
 	for _, ex := range m.Extra {
 		opt, ok := ex.(*dns.OPT)
 		if !ok {
@@ -391,22 +393,18 @@ func parseECS(m *dns.Msg) (net.IP, uint8) {
 			case 0:
 				fallthrough
 			case 1:
-				mask := sn.SourceNetmask
-				if sn.SourceScope != 0 {
-					mask = sn.SourceScope
-				}
-				return sn.Address, mask
+				fallthrough
 			case 2:
-				//
+				return sn.Address, sn.SourceNetmask, sn.SourceScope
 			}
 		}
 	}
-	return net.IP{}, 0
+	return net.IP{}, 0, 0
 }
 
 // Set EDNS Client Subnet option in DNS request object
 // Return IP mask
-func setECS(m *dns.Msg, ip net.IP) uint8 {
+func setECS(m *dns.Msg, ip net.IP, scope uint8) uint8 {
 	o := new(dns.OPT)
 	o.Hdr.Name = "."
 	o.Hdr.Rrtype = dns.TypeOPT
@@ -421,7 +419,7 @@ func setECS(m *dns.Msg, ip net.IP) uint8 {
 		e.SourceNetmask = 128
 		e.Address = ip
 	}
-	e.SourceScope = 0
+	e.SourceScope = scope
 	o.Option = append(o.Option, e)
 	m.Extra = append(m.Extra, o)
 	return e.SourceNetmask
@@ -431,15 +429,15 @@ func setECS(m *dns.Msg, ip net.IP) uint8 {
 func (p *Proxy) Resolve(d *DNSContext) error {
 	if p.Config.EnableEDNSClientSubnet {
 		// Set EDNS Client-Subnet data
-		ip, mask := parseECS(d.Req)
+		ip, mask, _ := parseECS(d.Req)
 		if mask == 0 {
 			var ip net.IP
 			var mask uint8
 			switch addr := d.Addr.(type) {
 			case *net.UDPAddr:
-				mask = setECS(d.Req, addr.IP)
+				mask = setECS(d.Req, addr.IP, 0)
 			case *net.TCPAddr:
-				mask = setECS(d.Req, addr.IP)
+				mask = setECS(d.Req, addr.IP, 0)
 			}
 			if len(ip) != 0 {
 				log.Debug("Set ECS option: %s/%d", ip, mask)
@@ -490,7 +488,9 @@ func (p *Proxy) Resolve(d *DNSContext) error {
 		// Saving cached response
 		if p.cache != nil {
 			if p.Config.EnableEDNSClientSubnet {
-				p.cache.SetWithSubnet(reply)
+				ip, _, scope := parseECS(reply)
+				log.Debug("ECS option in response: %s/%d", ip, scope)
+				p.cache.SetWithSubnet(reply, ip, scope)
 			} else {
 				p.cache.Set(reply)
 			}
