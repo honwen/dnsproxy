@@ -21,11 +21,88 @@ type cache struct {
 	sync.RWMutex               // lock
 }
 
+// Format:
+// uint16(qtype)
+// uint16(qclass)
+// uint8(subnet_mask)
+// client_ip
+// name
+func keyWithSubnet(m *dns.Msg, ip net.IP, mask uint8) []byte {
+	q := m.Question[0]
+	cap := 2 + 2 + 1 + len(q.Name)
+	if mask != 0 {
+		cap += len(ip)
+	}
+	b := make([]byte, cap)
+	binary.BigEndian.PutUint16(b[:], q.Qtype)
+	k := 2
+
+	binary.BigEndian.PutUint16(b[k:], q.Qclass)
+	k += 2
+
+	b[k] = mask
+	k++
+	if mask != 0 {
+		copy(b[k:], ip)
+		k += len(ip)
+	}
+
+	copy(b[k:], strings.ToLower(q.Name))
+	return b
+}
+
 func (c *cache) GetWithSubnet(request *dns.Msg, ip net.IP, mask uint8) (*dns.Msg, bool) {
-	return nil, false
+	if request == nil || len(request.Question) != 1 {
+		return nil, false
+	}
+	// create key for request
+	key := keyWithSubnet(request, ip, mask)
+	c.Lock()
+	if c.items == nil {
+		c.Unlock()
+		return nil, false
+	}
+	c.Unlock()
+	data := c.items.Get(key)
+	if data == nil {
+		key = keyWithSubnet(request, net.IP{}, 0)
+		data = c.items.Get(key)
+		if data == nil {
+			return nil, false
+		}
+	}
+
+	res := unpackResponse(data, request)
+	if res == nil {
+		c.items.Del(key)
+		return nil, false
+	}
+	return res, true
 }
 
 func (c *cache) SetWithSubnet(m *dns.Msg) {
+	if m == nil || !isCacheable(m) {
+		return
+	}
+	ip, mask := parseECS(m)
+	key := keyWithSubnet(m, ip, mask)
+
+	c.Lock()
+	// lazy initialization for cache
+	if c.items == nil {
+		conf := glcache.Config{
+			MaxSize:   defaultCacheSize,
+			EnableLRU: true,
+		}
+		if c.cacheSize > 0 {
+			conf.MaxSize = uint(c.cacheSize)
+		}
+		c.items = glcache.New(conf)
+	}
+	c.Unlock()
+
+	data := packResponse(m)
+	_ = c.items.Set(key, data)
 }
 
 func (c *cache) Get(request *dns.Msg) (*dns.Msg, bool) {

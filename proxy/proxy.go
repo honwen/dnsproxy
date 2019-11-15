@@ -377,6 +377,30 @@ func (p *Proxy) getUpstreamsForDomain(host string) []upstream.Upstream {
 }
 
 func parseECS(m *dns.Msg) (net.IP, uint8) {
+	for _, ex := range m.Extra {
+		opt, ok := ex.(*dns.OPT)
+		if !ok {
+			continue
+		}
+		for _, e := range opt.Option {
+			sn, ok := e.(*dns.EDNS0_SUBNET)
+			if !ok {
+				continue
+			}
+			switch sn.Family {
+			case 0:
+				fallthrough
+			case 1:
+				mask := sn.SourceNetmask
+				if sn.SourceScope != 0 {
+					mask = sn.SourceScope
+				}
+				return sn.Address, mask
+			case 2:
+				//
+			}
+		}
+	}
 	return net.IP{}, 0
 }
 
